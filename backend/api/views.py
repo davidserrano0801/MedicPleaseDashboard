@@ -8,7 +8,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
 from .mongo import get_client, get_collection, get_saves_collection
-from .analytics import ValidationError, validate_save, build_dashboard
+from .analytics import ValidationError, validate_save, build_dashboard, normalize_doc
 
 def serialize_item(document):
     return {
@@ -112,8 +112,11 @@ def save_upload(request):
         return Response({"error": "No se pudo guardar la partida"},
                         status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
+    attempts = [a for c in data["caseHistory"] for a in c["attempts"]]
     return Response({"status": "ok", "playerName": data["playerName"],
-                     "decisions": len(data["decisionsMade"])},
+                     "cases": len(data["caseHistory"]),
+                     "attempts": len(attempts),
+                     "decisions": sum(len(a["decisions"]) for a in attempts)},
                     status=status.HTTP_201_CREATED)
 
 @api_view(["GET"])
@@ -137,7 +140,6 @@ def player_detail(request, player_name):
     return Response({
         "playerName": doc["playerName"],
         "actualCase": doc.get("actualCase", ""),
-        "decisionsMade": doc.get("decisionsMade", []),
-        "relevantDecisionsMade": doc.get("relevantDecisionsMade"),
+        "caseHistory": normalize_doc(doc),
         "updated_at": doc["updated_at"].isoformat() if doc.get("updated_at") else None,
     })

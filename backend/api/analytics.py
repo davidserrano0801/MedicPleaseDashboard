@@ -4,19 +4,34 @@ Este módulo no depende de Django ni de MongoDB para poder probarlo fácilmente.
 
 Formato actual del save:
     {
-      "playerName": "Alejandro",
+      "playerName": "Dario",
       "actualCase": "Situacion1",
-      "decisionsMade": ["¿Ha notado ...?", "Observar el Rostro"],
-      "relevantDecisionsMade": ["Observar el Rostro"]      # opcional (aún no se guarda)
+      "caseHistory": [
+        {
+          "caseId": "Situacion1",
+          "attempts": [
+            {
+              "attemptNumber": 1,
+              "isFinished": true,
+              "isAbandoned": false,
+              "diagnosedCorrectly": true,
+              "decisions": [{"decision": "Trigémino", "isRelevant": true}]
+            }
+          ]
+        }
+      ]
     }
 
-- decisionsMade: todas las decisiones tomadas, en orden.
-- relevantDecisionsMade (también se acepta relevantDecisionMade): las decisiones relevantes (correctas) que tomó el jugador.
-  Si el campo no viene, las métricas de relevancia se muestran como "sin datos".
+Compatibilidad: el formato anterior (decisionsMade + relevantDecisionsMade /
+relevantDecisionMade) se convierte automáticamente a un único intento "en curso"
+del caso actual, tanto al recibirlo como al leer partidas viejas de la base.
 """
+import re
 
 MAX_NAME = 60
 MAX_CASE = 100
+MAX_CASES = 100
+MAX_ATTEMPTS = 500
 MAX_DECISIONS = 2000
 MAX_TEXT = 500
 
@@ -25,21 +40,106 @@ class ValidationError(ValueError):
     pass
 
 
-def _clean_list(raw, field):
-    if not isinstance(raw, list):
-        raise ValidationError(f"{field} debe ser una lista de textos")
-    if len(raw) > MAX_DECISIONS:
+# ------------------------------------------------------------- validación
+
+def _text(value, field, limit):
+    if not isinstance(value, str):
+        raise ValidationError(f"{field} debe ser texto")
+    return value.strip()[:limit]
+
+
+def _bool(value, field, default=False):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    raise ValidationError(f"{field} debe ser true o false")
+
+
+def _list(value, field, limit):
+    if not isinstance(value, list):
+        raise ValidationError(f"{field} debe ser una lista")
+    if len(value) > limit:
         raise ValidationError(f"{field} tiene demasiados elementos")
+    return value
+
+
+def _clean_decision(raw):
+    if isinstance(raw, str):
+        text, relevant = raw, None
+    elif isinstance(raw, dict):
+        text = raw.get("decision")
+        if not isinstance(text, str):
+            raise ValidationError("Cada decisión necesita el campo 'decision' (texto)")
+        relevant = _bool(raw.get("isRelevant"), "isRelevant", default=None)
+    else:
+        raise ValidationError("Cada decisión debe ser un objeto o un texto")
+    text = text.strip()
+    if not text:
+        return None
+    return {"decision": text[:MAX_TEXT], "isRelevant": relevant}
+
+
+def _clean_attempt(raw, index):
+    if not isinstance(raw, dict):
+        raise ValidationError("Cada intento debe ser un objeto")
+    number = raw.get("attemptNumber")
+    if isinstance(number, bool) or not isinstance(number, int) or number < 1:
+        number = index + 1
+    decisions_raw = _list(raw.get("decisions", []), "decisions", MAX_DECISIONS)
+    decisions = [d for d in (_clean_decision(x) for x in decisions_raw) if d]
+    return {
+        "attemptNumber": number,
+        "isFinished": _bool(raw.get("isFinished"), "isFinished"),
+        "isAbandoned": _bool(raw.get("isAbandoned"), "isAbandoned"),
+        "diagnosedCorrectly": _bool(raw.get("diagnosedCorrectly"), "diagnosedCorrectly"),
+        "decisions": decisions,
+    }
+
+
+def _clean_case(raw):
+    if not isinstance(raw, dict):
+        raise ValidationError("Cada elemento de caseHistory debe ser un objeto")
+    case_id = _text(raw.get("caseId"), "caseId", MAX_CASE)
+    if not case_id:
+        raise ValidationError("caseId es obligatorio en cada caso")
+    attempts_raw = _list(raw.get("attempts", []), "attempts", MAX_ATTEMPTS)
+    return {
+        "caseId": case_id,
+        "attempts": [_clean_attempt(a, i) for i, a in enumerate(attempts_raw)],
+    }
+
+
+def _legacy_history(case, decisions, relevant):
+    """Convierte decisionsMade/relevantDecisionsMade en un caseHistory."""
+    if not decisions:
+        return []
+    relevant_set = set(relevant) if relevant is not None else None
+    return [{
+        "caseId": case or "Sin caso",
+        "attempts": [{
+            "attemptNumber": 1,
+            "isFinished": False,
+            "isAbandoned": False,
+            "diagnosedCorrectly": False,
+            "decisions": [
+                {"decision": d,
+                 "isRelevant": None if relevant_set is None else d in relevant_set}
+                for d in decisions
+            ],
+        }],
+    }]
+
+
+def _clean_text_list(raw, field):
     result = []
-    for item in raw:
-        if isinstance(item, str):
-            text = item.strip()
-            if text:
-                result.append(text[:MAX_TEXT])
-        elif isinstance(item, (int, float)) and not isinstance(item, bool):
-            result.append(str(item))
-        else:
+    for item in _list(raw, field, MAX_DECISIONS):
+        if not isinstance(item, str):
             raise ValidationError(f"{field} solo admite textos")
+        if item.strip():
+            result.append(item.strip()[:MAX_TEXT])
     return result
 
 
@@ -48,124 +148,172 @@ def validate_save(payload):
     if not isinstance(payload, dict):
         raise ValidationError("El cuerpo debe ser un objeto JSON")
 
-    name = str(payload.get("playerName", "")).strip()
+    name = _text(payload.get("playerName", ""), "playerName", MAX_NAME)
     if not name:
         raise ValidationError("playerName es obligatorio")
+    actual_case = _text(payload.get("actualCase", ""), "actualCase", MAX_CASE)
 
-    decisions = _clean_list(payload.get("decisionsMade", []), "decisionsMade")
+    if payload.get("caseHistory") is not None:
+        history = [_clean_case(c) for c in
+                   _list(payload["caseHistory"], "caseHistory", MAX_CASES)]
+    elif payload.get("decisionsMade") is not None:  # formato anterior
+        relevant_raw = payload.get("relevantDecisionsMade")
+        if relevant_raw is None:
+            relevant_raw = payload.get("relevantDecisionMade")
+        history = _legacy_history(
+            actual_case,
+            _clean_text_list(payload["decisionsMade"], "decisionsMade"),
+            None if relevant_raw is None
+            else _clean_text_list(relevant_raw, "relevantDecisionsMade"),
+        )
+    else:
+        history = []
 
-    # None = el juego aún no envía este campo (distinto de lista vacía).
-    # Acepta el nombre en plural y también la variante en singular.
-    raw_relevant = payload.get("relevantDecisionsMade")
-    if raw_relevant is None:
-        raw_relevant = payload.get("relevantDecisionMade")
-    relevant = None
-    if raw_relevant is not None:
-        relevant = _clean_list(raw_relevant, "relevantDecisionsMade")
+    return {"playerName": name, "actualCase": actual_case, "caseHistory": history}
 
-    return {
-        "playerName": name[:MAX_NAME],
-        "actualCase": str(payload.get("actualCase", "")).strip()[:MAX_CASE],
-        "decisionsMade": decisions,
-        "relevantDecisionsMade": relevant,
-    }
+
+def normalize_doc(doc):
+    """caseHistory de un documento guardado (convierte partidas del formato viejo)."""
+    history = doc.get("caseHistory")
+    if history is not None:
+        return history
+    return _legacy_history(
+        doc.get("actualCase", ""),
+        doc.get("decisionsMade") or [],
+        doc.get("relevantDecisionsMade"),
+    )
 
 
 # ---------------------------------------------------------------- métricas
 
 def natural_key(text):
     """'Situacion 10' va después de 'Situacion 2'."""
-    import re
     return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", text or "")]
 
 
-def _player_stats(save):
-    decisions = save.get("decisionsMade", []) or []
-    relevant = save.get("relevantDecisionsMade")
-    total = len(decisions)
-    if relevant is None:
-        relevant_count = None
-        precision = None
-    else:
-        relevant_set = set(relevant)
-        relevant_count = sum(1 for d in decisions if d in relevant_set)
-        precision = round(100 * relevant_count / total, 1) if total else None
-    return total, relevant_count, precision
+def attempt_status(attempt):
+    if attempt.get("isAbandoned"):
+        return "abandoned"
+    if not attempt.get("isFinished"):
+        return "in_progress"
+    return "correct" if attempt.get("diagnosedCorrectly") else "incorrect"
+
+
+def _acc():
+    return {"attempts": 0, "abandoned": 0, "completed": 0, "correct": 0,
+            "decisions": 0, "rated": 0, "relevant": 0, "to_success": []}
+
+
+def _add_attempt(acc, attempt):
+    status = attempt_status(attempt)
+    acc["attempts"] += 1
+    acc["abandoned"] += status == "abandoned"
+    acc["completed"] += status in ("correct", "incorrect")
+    acc["correct"] += status == "correct"
+    for d in attempt.get("decisions", []):
+        acc["decisions"] += 1
+        if d.get("isRelevant") is not None:
+            acc["rated"] += 1
+            acc["relevant"] += bool(d["isRelevant"])
+
+
+def _pct(part, whole):
+    return round(100 * part / whole, 1) if whole else None
+
+
+def _avg(values):
+    return round(sum(values) / len(values), 2) if values else None
+
+
+def _rates(acc):
+    return {
+        "attempts": acc["attempts"],
+        "abandoned": acc["abandoned"],
+        "completed": acc["completed"],
+        "correct": acc["correct"],
+        "success_rate": _pct(acc["correct"], acc["completed"]),
+        "decisions": acc["decisions"],
+        "relevant": acc["relevant"] if acc["rated"] else None,
+        "precision": _pct(acc["relevant"], acc["rated"]),
+        "avg_attempts_to_success": _avg(acc["to_success"]),
+    }
 
 
 def build_dashboard(saves, top_n=15):
     """`saves`: lista de documentos guardados en Mongo (con updated_at)."""
-    players = []
+    total = _acc()
+    per_case = {}
     players_per_case = {}
-    total_decisions = 0
-    total_relevant = 0
-    players_with_relevance = 0
-    decisions_in_relevance_players = 0
-
-    # decisión -> jugadores que la tomaron / jugadores que la marcaron relevante
-    taken_by = {}
-    relevant_flag = {}
+    outcomes = {"correct": 0, "incorrect": 0, "abandoned": 0, "in_progress": 0}
+    taken_by, relevant_flag = {}, {}
+    players = []
 
     for save in saves:
         name = save.get("playerName", "")
-        decisions = save.get("decisionsMade", []) or []
-        relevant = save.get("relevantDecisionsMade")
-        total, relevant_count, precision = _player_stats(save)
+        current = save.get("actualCase") or "Sin caso"
+        players_per_case[current] = players_per_case.get(current, 0) + 1
+        mine = _acc()
+        case_ids = set()
 
-        case = save.get("actualCase") or "Sin caso"
-        players_per_case[case] = players_per_case.get(case, 0) + 1
-
-        total_decisions += total
-        if relevant_count is not None:
-            players_with_relevance += 1
-            total_relevant += relevant_count
-            decisions_in_relevance_players += total
-
-        for d in set(decisions):
-            taken_by.setdefault(d, set()).add(name)
-            relevant_flag.setdefault(d, None)
-        if relevant is not None:
-            for d in set(decisions):
-                relevant_flag[d] = bool(relevant_flag[d]) or d in set(relevant)
-            # lo que está en 'relevant' pero no en 'decisions' también cuenta como relevante
-            for d in relevant:
-                relevant_flag[d] = True
-                taken_by.setdefault(d, set()).add(name)
+        for case in normalize_doc(save):
+            case_id = case.get("caseId") or "Sin caso"
+            case_ids.add(case_id)
+            case_acc = per_case.setdefault(case_id, {"players": set(), "acc": _acc()})
+            case_acc["players"].add(name)
+            for index, attempt in enumerate(case.get("attempts", [])):
+                outcomes[attempt_status(attempt)] += 1
+                for acc in (total, mine, case_acc["acc"]):
+                    _add_attempt(acc, attempt)
+                for d in attempt.get("decisions", []):
+                    text = d["decision"]
+                    taken_by.setdefault(text, set()).add(name)
+                    relevant_flag.setdefault(text, None)
+                    if d.get("isRelevant") is not None:
+                        relevant_flag[text] = bool(relevant_flag[text]) or bool(d["isRelevant"])
+            # intentos que necesitó este jugador hasta acertar este caso
+            first = next((i + 1 for i, a in enumerate(case.get("attempts", []))
+                          if attempt_status(a) == "correct"), None)
+            if first is not None:
+                total["to_success"].append(first)
+                mine["to_success"].append(first)
+                case_acc["acc"]["to_success"].append(first)
 
         updated = save.get("updated_at")
         players.append({
             "playerName": name,
-            "actualCase": case,
-            "decisions": total,
-            "relevant": relevant_count,
-            "precision": precision,
+            "actualCase": current,
+            "cases": len(case_ids),
             "updated_at": updated.isoformat() if updated else None,
+            **_rates(mine),
         })
 
     n = len(players)
+    overall = _rates(total)
     top = sorted(taken_by.items(), key=lambda kv: (-len(kv[1]), kv[0]))[:top_n]
 
     return {
         "totals": {
             "players": n,
-            "decisions": total_decisions,
-            "avg_decisions_per_player": round(total_decisions / n, 2) if n else 0,
-            "relevant_decisions": total_relevant if players_with_relevance else None,
-            "precision": (round(100 * total_relevant / decisions_in_relevance_players, 1)
-                          if decisions_in_relevance_players else None),
-            "players_with_relevance": players_with_relevance,
+            "abandon_rate": _pct(total["abandoned"], total["attempts"]),
+            **overall,
         },
+        "outcomes": [
+            {"label": "Diagnóstico correcto", "count": outcomes["correct"]},
+            {"label": "Diagnóstico incorrecto", "count": outcomes["incorrect"]},
+            {"label": "Abandonado", "count": outcomes["abandoned"]},
+            {"label": "En curso", "count": outcomes["in_progress"]},
+        ],
         "players_per_case": [
             {"case": c, "players": players_per_case[c]}
             for c in sorted(players_per_case, key=natural_key)
         ],
+        "cases": [
+            {"case": c, "players": len(per_case[c]["players"]), **_rates(per_case[c]["acc"])}
+            for c in sorted(per_case, key=natural_key)
+        ],
         "top_decisions": [
-            {
-                "decision": d,
-                "players": len(who),
-                "percent": round(100 * len(who) / n, 1) if n else 0,
-                "relevant": relevant_flag.get(d),
-            }
+            {"decision": d, "players": len(who),
+             "percent": _pct(len(who), n) or 0, "relevant": relevant_flag.get(d)}
             for d, who in top
         ],
         "players": sorted(players, key=lambda p: p["updated_at"] or "", reverse=True),

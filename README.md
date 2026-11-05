@@ -26,7 +26,9 @@
 ## API del juego (Unity)
 - `POST /api/saves/`: Unity envía el contenido de `saveFile.json`. Requiere la
   cabecera `X-API-Key` con el valor de `GAME_API_KEY`. Guarda un documento por
-  `playerName` (si ya existe, lo actualiza).
+  `playerName` (si ya existe, lo reemplaza). Formato: `caseHistory` → `attempts` →
+  `decisions` (`decision` + `isRelevant`). El formato anterior (`decisionsMade`)
+  todavía se acepta y se convierte automáticamente.
 - `GET /api/dashboard/`: métricas agregadas que consume el dashboard.
 - `GET /api/players/<playerName>/`: partida completa de un jugador.
 
@@ -34,7 +36,7 @@ Prueba rápida sin Unity:
 ```bash
 curl -X POST http://localhost/api/saves/ \
   -H "Content-Type: application/json" -H "X-API-Key: TU_CLAVE" \
-  -d '{"playerName":"Sans","actualCase":"Situacion1","decisionsMade":["Observar el Rostro"],"relevantDecisionsMade":["Observar el Rostro"]}'
+  -d '{"playerName":"Sans","actualCase":"Situacion1","caseHistory":[{"caseId":"Situacion1","attempts":[{"attemptNumber":1,"isFinished":true,"isAbandoned":false,"diagnosedCorrectly":true,"decisions":[{"decision":"Trigémino","isRelevant":true}]}]}]}'
 ```
 
 ## Comandos útiles
@@ -75,4 +77,3 @@ El script `mongo/init-mongo.js` se ejecuta únicamente cuando MongoDB inicializa
 un volumen de datos vacío. Si cambias las credenciales después de crear el volumen,
 debes actualizar el usuario dentro de MongoDB manualmente; recrear el contenedor no
 vuelve a ejecutar el script.
-# MedicPleaseDashboard

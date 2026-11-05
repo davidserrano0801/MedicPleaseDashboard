@@ -5,6 +5,19 @@ const REFRESH_MS = 15000;
 const fmt = (value, suffix = "") =>
   value === null || value === undefined ? "—" : `${value}${suffix}`;
 
+const STATUS = {
+  correct: { label: "Diagnóstico correcto", cls: "ok" },
+  incorrect: { label: "Diagnóstico incorrecto", cls: "no" },
+  abandoned: { label: "Abandonado", cls: "warn" },
+  in_progress: { label: "En curso", cls: "info" },
+};
+
+function attemptStatus(attempt) {
+  if (attempt.isAbandoned) return "abandoned";
+  if (!attempt.isFinished) return "in_progress";
+  return attempt.diagnosedCorrectly ? "correct" : "incorrect";
+}
+
 function Card({ label, value, hint }) {
   return (
     <div className="card">
@@ -44,6 +57,11 @@ function RelevanceBadge({ relevant }) {
   return relevant
     ? <span className="badge ok">relevante</span>
     : <span className="badge no">no relevante</span>;
+}
+
+function StatusBadge({ status }) {
+  const { label, cls } = STATUS[status];
+  return <span className={`badge ${cls}`}>{label}</span>;
 }
 
 function RelevancePie({ relevant, notRelevant }) {
@@ -88,11 +106,10 @@ function PlayerDetail({ name, onClose }) {
       .catch(e => setError(e.message));
   }, [name]);
 
-  const relevantSet = data?.relevantDecisionsMade ? new Set(data.relevantDecisionsMade) : null;
-  const relevantCount = relevantSet
-    ? data.decisionsMade.filter(d => relevantSet.has(d)).length
-    : 0;
-  const notRelevantCount = relevantSet ? data.decisionsMade.length - relevantCount : 0;
+  const history = data?.caseHistory ?? [];
+  const allDecisions = history.flatMap(c => c.attempts.flatMap(a => a.decisions));
+  const rated = allDecisions.filter(d => d.isRelevant !== null && d.isRelevant !== undefined);
+  const relevantCount = rated.filter(d => d.isRelevant).length;
 
   return (
     <section className="panel">
@@ -104,27 +121,52 @@ function PlayerDetail({ name, onClose }) {
       {data && (
         <>
           <p className="muted">Caso actual: {data.actualCase || "—"}</p>
-          {!relevantSet && (
-            <p className="muted">
-              Esta partida aún no incluye relevantDecisionsMade, por eso no se
-              marca qué decisiones fueron relevantes.
-            </p>
+
+          {rated.length > 0 && (
+            <RelevancePie relevant={relevantCount} notRelevant={rated.length - relevantCount} />
           )}
-          {relevantSet && data.decisionsMade.length > 0 && (
-            <RelevancePie relevant={relevantCount} notRelevant={notRelevantCount} />
+
+          {history.length === 0 && (
+            <p className="muted">Este jugador todavía no tiene intentos registrados.</p>
           )}
-          {data.decisionsMade.length === 0 ? (
-            <p className="muted">Este jugador todavía no ha tomado decisiones.</p>
-          ) : (
-            <ol className="decision-list">
-              {data.decisionsMade.map((d, i) => (
-                <li key={i}>
-                  <span>{d}</span>
-                  {relevantSet && <RelevanceBadge relevant={relevantSet.has(d)} />}
-                </li>
-              ))}
-            </ol>
-          )}
+
+          {history.map(c => (
+            <div className="case-block" key={c.caseId}>
+              <h3>{c.caseId}</h3>
+              {c.attempts.length === 0 && <p className="muted">Sin intentos.</p>}
+              {c.attempts.map((a, i) => {
+                const rel = a.decisions.filter(d => d.isRelevant === true).length;
+                const hasRating = a.decisions.some(
+                  d => d.isRelevant !== null && d.isRelevant !== undefined
+                );
+                return (
+                  <details className="attempt" key={a.attemptNumber ?? i}
+                           open={i === c.attempts.length - 1}>
+                    <summary>
+                      <strong>Intento {a.attemptNumber ?? i + 1}</strong>
+                      <StatusBadge status={attemptStatus(a)} />
+                      <span className="muted">
+                        {a.decisions.length} decisiones
+                        {hasRating ? ` · ${rel} relevantes` : ""}
+                      </span>
+                    </summary>
+                    {a.decisions.length === 0 ? (
+                      <p className="muted">No se registraron decisiones en este intento.</p>
+                    ) : (
+                      <ol className="decision-list">
+                        {a.decisions.map((d, j) => (
+                          <li key={j}>
+                            <span>{d.decision}</span>
+                            <RelevanceBadge relevant={d.isRelevant} />
+                          </li>
+                        ))}
+                      </ol>
+                    )}
+                  </details>
+                );
+              })}
+            </div>
+          ))}
         </>
       )}
     </section>
@@ -156,7 +198,6 @@ export default function App() {
   }, [load]);
 
   const totals = data?.totals;
-  const noRelevance = totals && totals.precision === null;
 
   return (
     <main className="container wide">
@@ -187,32 +228,69 @@ export default function App() {
         <>
           <div className="cards">
             <Card label="Jugadores" value={totals.players} />
-            <Card label="Decisiones totales" value={totals.decisions} />
-            <Card label="Decisiones por jugador" value={totals.avg_decisions_per_player} />
-            <Card label="Decisiones relevantes" value={fmt(totals.relevant_decisions)}
-                  hint={noRelevance ? "Sin datos: falta relevantDecisionsMade" : null} />
-            <Card label="Precisión" value={fmt(totals.precision, "%")}
-                  hint={noRelevance ? null : "Relevantes ÷ decisiones tomadas"} />
+            <Card label="Intentos" value={totals.attempts} />
+            <Card label="Diagnóstico correcto" value={fmt(totals.success_rate, "%")}
+                  hint="Sobre intentos terminados sin abandonar" />
+            <Card label="Abandono" value={fmt(totals.abandon_rate, "%")}
+                  hint="Sobre el total de intentos" />
+            <Card label="Intentos hasta acertar" value={fmt(totals.avg_attempts_to_success)}
+                  hint="Promedio por jugador y caso" />
+            <Card label="Precisión de decisiones" value={fmt(totals.precision, "%")}
+                  hint={totals.precision === null ? "Sin decisiones evaluadas" : "Relevantes ÷ tomadas"} />
           </div>
 
           <div className="grid-2">
             <section className="panel">
-              <h2>Jugadores por caso actual</h2>
-              <Bars rows={data.players_per_case} labelKey="case" valueKey="players" />
+              <h2>Resultado de los intentos</h2>
+              <Bars rows={data.outcomes} labelKey="label" valueKey="count" wide />
             </section>
 
             <section className="panel">
-              <h2>Decisiones más frecuentes</h2>
-              {data.top_decisions.length === 0 ? (
-                <p className="muted">Aún no hay decisiones registradas.</p>
-              ) : (
-                <Bars rows={data.top_decisions} labelKey="decision" valueKey="percent"
-                      max={100} suffix="%" wide
-                      badge={row => <RelevanceBadge relevant={row.relevant} />} />
-              )}
-              <p className="muted small-note">Porcentaje de jugadores que tomó cada decisión.</p>
+              <h2>Jugadores por caso actual</h2>
+              <Bars rows={data.players_per_case} labelKey="case" valueKey="players" />
             </section>
           </div>
+
+          <section className="panel">
+            <h2>Rendimiento por caso</h2>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Caso</th><th>Jugadores</th><th>Intentos</th><th>Abandonos</th>
+                    <th>Dx correctos</th><th>% éxito</th><th>Intentos hasta acertar</th>
+                    <th>Precisión</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.cases.map(c => (
+                    <tr key={c.case}>
+                      <td><strong>{c.case}</strong></td>
+                      <td>{c.players}</td>
+                      <td>{c.attempts}</td>
+                      <td>{c.abandoned}</td>
+                      <td>{c.correct}</td>
+                      <td>{fmt(c.success_rate, "%")}</td>
+                      <td>{fmt(c.avg_attempts_to_success)}</td>
+                      <td>{fmt(c.precision, "%")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="panel">
+            <h2>Decisiones más frecuentes</h2>
+            {data.top_decisions.length === 0 ? (
+              <p className="muted">Aún no hay decisiones registradas.</p>
+            ) : (
+              <Bars rows={data.top_decisions} labelKey="decision" valueKey="percent"
+                    max={100} suffix="%" wide
+                    badge={row => <RelevanceBadge relevant={row.relevant} />} />
+            )}
+            <p className="muted small-note">Porcentaje de jugadores que tomó cada decisión.</p>
+          </section>
 
           <section className="panel">
             <h2>Jugadores</h2>
@@ -220,8 +298,9 @@ export default function App() {
               <table>
                 <thead>
                   <tr>
-                    <th>Jugador</th><th>Caso actual</th><th>Decisiones</th>
-                    <th>Relevantes</th><th>Precisión</th><th>Última partida</th><th></th>
+                    <th>Jugador</th><th>Caso actual</th><th>Intentos</th><th>Abandonos</th>
+                    <th>Dx correctos</th><th>% éxito</th><th>Decisiones</th>
+                    <th>Precisión</th><th>Última partida</th><th></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -229,8 +308,11 @@ export default function App() {
                     <tr key={p.playerName}>
                       <td><strong>{p.playerName}</strong></td>
                       <td>{p.actualCase}</td>
+                      <td>{p.attempts}</td>
+                      <td>{p.abandoned}</td>
+                      <td>{p.correct}</td>
+                      <td>{fmt(p.success_rate, "%")}</td>
                       <td>{p.decisions}</td>
-                      <td>{fmt(p.relevant)}</td>
                       <td>{fmt(p.precision, "%")}</td>
                       <td>{p.updated_at ? new Date(p.updated_at).toLocaleString() : "—"}</td>
                       <td>

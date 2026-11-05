@@ -70,3 +70,13 @@ ol.decision-list li span:first-child { margin-right: 6px; }
 .swatch { width: 14px; height: 14px; border-radius: 4px; display: inline-block; }
 .swatch.ok { background: #22c55e; }
 .swatch.no { background: #ef4444; }
+
+/* ---------- Intentos por caso ---------- */
+.badge.warn { color: #fde68a; background: #5c4a14; }
+.badge.info { color: #bfdbfe; background: #1e3a5f; }
+.case-block { margin-top: 22px; }
+.case-block h3 { margin: 0 0 10px; font-size: 16px; color: #e5e7eb; }
+details.attempt { border: 1px solid #26364d; border-radius: 12px; padding: 4px 14px; margin-bottom: 10px; background: #0f1a2b; }
+details.attempt summary { cursor: pointer; padding: 10px 0; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+details.attempt summary .muted { margin-left: 10px; font-size: 13px; }
+details.attempt .decision-list { margin-bottom: 12px; }
