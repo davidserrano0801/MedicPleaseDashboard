@@ -27,6 +27,7 @@ relevantDecisionMade) se convierte automáticamente a un único intento "en curs
 del caso actual, tanto al recibirlo como al leer partidas viejas de la base.
 """
 import re
+from datetime import datetime, timedelta, timezone
 
 MAX_NAME = 60
 MAX_CASE = 100
@@ -172,6 +173,31 @@ def validate_save(payload):
     return {"playerName": name, "actualCase": actual_case, "caseHistory": history}
 
 
+def stamp_attempts(new_history, old_history, now, fallback=None):
+    """Agrega fechas (puestas por el servidor, no por el juego) a cada intento:
+    firstSeenAt = primera vez que se recibió, finishedAt = primera vez que llegó
+    terminado o abandonado. `fallback` (ISO) se usa para intentos de partidas
+    guardadas antes de que existieran estas fechas."""
+    iso = now.isoformat()
+    old = {(c.get("caseId"), a.get("attemptNumber")): a
+           for c in old_history for a in c.get("attempts", [])}
+    for case in new_history:
+        for attempt in case["attempts"]:
+            done = attempt["isFinished"] or attempt["isAbandoned"]
+            prev = old.get((case["caseId"], attempt["attemptNumber"]))
+            if prev:
+                first = prev.get("firstSeenAt") or fallback or iso
+                finished = prev.get("finishedAt")
+                if finished is None and done:
+                    finished = iso if prev.get("firstSeenAt") else (fallback or iso)
+            else:
+                first = iso
+                finished = iso if done else None
+            attempt["firstSeenAt"] = first
+            attempt["finishedAt"] = finished
+    return new_history
+
+
 def normalize_doc(doc):
     """caseHistory de un documento guardado (convierte partidas del formato viejo)."""
     history = doc.get("caseHistory")
@@ -239,8 +265,40 @@ def _rates(acc):
     }
 
 
-def build_dashboard(saves, top_n=15):
+def _aware(value):
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    if not isinstance(value, datetime):
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _week_metrics(acc, active_players, total_players, start, end):
+    ended = acc["completed"] + acc["abandoned"]
+    return {
+        "from": start.isoformat(),
+        "to": end.isoformat(),
+        "attempts": acc["attempts"],
+        "completed": acc["completed"],
+        "abandoned": acc["abandoned"],
+        "correct": acc["correct"],
+        "active_players": len(active_players),
+        "success_rate": _pct(acc["correct"], acc["completed"]),
+        "precision": _pct(acc["relevant"], acc["rated"]),
+        "completion_rate": _pct(acc["completed"], ended),
+        "participation": _pct(len(active_players), total_players),
+    }
+
+
+def build_dashboard(saves, top_n=15, now=None):
     """`saves`: lista de documentos guardados en Mongo (con updated_at)."""
+    now = _aware(now) or datetime.now(timezone.utc)
+    week_start = now - timedelta(days=7)
+    prev_start = now - timedelta(days=14)
+    weeks = {"current": (_acc(), set()), "previous": (_acc(), set())}
     total = _acc()
     per_case = {}
     players_per_case = {}
@@ -262,6 +320,14 @@ def build_dashboard(saves, top_n=15):
             case_acc["players"].add(name)
             for index, attempt in enumerate(case.get("attempts", [])):
                 outcomes[attempt_status(attempt)] += 1
+                when = (_aware(attempt.get("finishedAt")) or _aware(attempt.get("firstSeenAt"))
+                        or _aware(save.get("updated_at")))
+                if when is not None:
+                    bucket = ("current" if when >= week_start
+                              else "previous" if when >= prev_start else None)
+                    if bucket:
+                        _add_attempt(weeks[bucket][0], attempt)
+                        weeks[bucket][1].add(name)
                 for acc in (total, mine, case_acc["acc"]):
                     _add_attempt(acc, attempt)
                 for d in attempt.get("decisions", []):
@@ -296,6 +362,10 @@ def build_dashboard(saves, top_n=15):
             "players": n,
             "abandon_rate": _pct(total["abandoned"], total["attempts"]),
             **overall,
+        },
+        "weekly": {
+            "current": _week_metrics(*weeks["current"], n, week_start, now),
+            "previous": _week_metrics(*weeks["previous"], n, prev_start, week_start),
         },
         "outcomes": [
             {"label": "Diagnóstico correcto", "count": outcomes["correct"]},

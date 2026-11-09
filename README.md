@@ -23,13 +23,33 @@
   `{"name":"Mi primer registro","description":"Prueba"}`
 - `DELETE /api/items/<id>/`: elimina un elemento.
 
+## Usuarios y roles
+Hay dos roles. Todo exige sesión salvo `/api/health/`, `/api/auth/login/` y la subida de Unity.
+
+| | Administrador | Profesor |
+|---|---|---|
+| Dashboard y detalle de jugadores | Sí | Sí |
+| Eliminar jugadores y exportar todos los datos | Sí | No |
+| Crear, desactivar, eliminar usuarios y cambiar contraseñas | Sí | No |
+
+El primer administrador se crea automáticamente con `ADMIN_USERNAME` y
+`ADMIN_PASSWORD` del `.env` la primera vez que alguien inicia sesión y no existe
+ningún administrador (cambiar luego esas variables no modifica una cuenta ya creada).
+Desde la pestaña **Administración** se crean los demás usuarios, por ejemplo el
+del profesor. Las contraseñas se guardan con PBKDF2 y la sesión viaja en una
+cookie HttpOnly; con HTTPS pon `AUTH_COOKIE_SECURE=1`.
+
+- `POST /api/auth/login/`, `POST /api/auth/logout/`, `GET /api/auth/me/`
+- `GET|POST /api/users/`, `PATCH|DELETE /api/users/<usuario>/` (administrador)
+- `DELETE /api/players/<jugador>/`, `GET /api/admin/export/` (administrador)
+
 ## API del juego (Unity)
 - `POST /api/saves/`: Unity envía el contenido de `saveFile.json`. Requiere la
   cabecera `X-API-Key` con el valor de `GAME_API_KEY`. Guarda un documento por
   `playerName` (si ya existe, lo reemplaza). Formato: `caseHistory` → `attempts` →
   `decisions` (`decision` + `isRelevant`). El formato anterior (`decisionsMade`)
   todavía se acepta y se convierte automáticamente.
-- `GET /api/dashboard/`: métricas agregadas que consume el dashboard.
+- `GET /api/dashboard/`: métricas agregadas (incluye la comparación semanal) que consume el dashboard.
 - `GET /api/players/<playerName>/`: partida completa de un jugador.
 
 Prueba rápida sin Unity:

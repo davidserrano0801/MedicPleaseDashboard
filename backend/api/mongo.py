@@ -12,6 +12,7 @@ def get_client():
         password=cfg["password"],
         authSource=cfg["database"],
         serverSelectionTimeoutMS=5000,
+        tz_aware=True,  # las fechas vuelven con zona horaria (UTC)
     )
 
 def get_collection():
@@ -28,4 +29,17 @@ def get_saves_collection():
     if not _saves_index_ready:
         collection.create_index("playerName", unique=True)
         _saves_index_ready = True
+    return collection
+
+
+_users_index_ready = False
+
+def get_users_collection():
+    """Usuarios de la plataforma (administrador y profesor)."""
+    global _users_index_ready
+    cfg = settings.MONGO_CONFIG
+    collection = get_client()[cfg["database"]]["users"]
+    if not _users_index_ready:
+        collection.create_index("username", unique=True)
+        _users_index_ready = True
     return collection

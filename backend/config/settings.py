@@ -44,9 +44,12 @@ USE_TZ = True
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 REST_FRAMEWORK = {
-    # django.contrib.auth no está instalado: sin esto DRF intenta importar
-    # AnonymousUser en cada petición y responde 500.
-    "DEFAULT_AUTHENTICATION_CLASSES": [],
+    # django.contrib.auth no está instalado: sin UNAUTHENTICATED_USER = None DRF
+    # intenta importar AnonymousUser en cada petición y responde 500.
+    # Los usuarios viven en MongoDB (ver api/auth.py y api/user_views.py).
+    "DEFAULT_AUTHENTICATION_CLASSES": ["api.auth.CookieAuthentication"],
+    # Seguro por defecto: todo exige sesión salvo lo que se marque como AllowAny.
+    "DEFAULT_PERMISSION_CLASSES": ["api.permissions.IsLoggedIn"],
     "UNAUTHENTICATED_USER": None,
     "DEFAULT_RENDERER_CLASSES": [
         "rest_framework.renderers.JSONRenderer",
@@ -66,3 +69,11 @@ MONGO_CONFIG = {
 
 # Clave que Unity envía en la cabecera X-API-Key al subir la partida.
 GAME_API_KEY = os.environ.get("GAME_API_KEY", "")
+
+# Usuarios y sesiones
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")  # solo para crear el primer administrador
+AUTH_COOKIE_NAME = "session"
+AUTH_SESSION_HOURS = int(os.environ.get("AUTH_SESSION_HOURS", "12"))
+# Pon AUTH_COOKIE_SECURE=1 cuando el sitio se sirva por HTTPS.
+AUTH_COOKIE_SECURE = os.environ.get("AUTH_COOKIE_SECURE", "0").lower() in ("1", "true", "yes")

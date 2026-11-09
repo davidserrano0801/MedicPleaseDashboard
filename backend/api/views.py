@@ -4,11 +4,16 @@ from django.conf import settings
 from bson import ObjectId
 from bson.errors import InvalidId
 from pymongo.errors import PyMongoError
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework import status
 from .mongo import get_client, get_collection, get_saves_collection
-from .analytics import ValidationError, validate_save, build_dashboard, normalize_doc
+from .analytics import (ValidationError, validate_save, build_dashboard,
+                        normalize_doc, stamp_attempts)
+from .permissions import IsAdmin
+from .user_views import public_user
+from .mongo import get_users_collection
 
 def serialize_item(document):
     return {
@@ -20,6 +25,8 @@ def serialize_item(document):
     }
 
 @api_view(["GET"])
+@authentication_classes([])
+@permission_classes([AllowAny])
 def health(request):
     try:
         get_client().admin.command("ping")
@@ -31,6 +38,7 @@ def health(request):
         )
 
 @api_view(["GET", "POST"])
+@permission_classes([IsAdmin])
 def item_collection(request):
     collection = get_collection()
 
@@ -64,6 +72,7 @@ def item_collection(request):
                         status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
 @api_view(["DELETE"])
+@permission_classes([IsAdmin])
 def item_detail(request, item_id):
     try:
         object_id = ObjectId(item_id)
@@ -90,6 +99,8 @@ def _has_valid_api_key(request):
     return bool(expected) and hmac.compare_digest(provided, expected)
 
 @api_view(["POST"])
+@authentication_classes([])
+@permission_classes([AllowAny])
 def save_upload(request):
     """Unity envía aquí el contenido de saveFile.json (requiere X-API-Key)."""
     if not _has_valid_api_key(request):
@@ -102,10 +113,15 @@ def save_upload(request):
 
     now = datetime.now(timezone.utc)
     try:
-        get_saves_collection().update_one(
+        saves = get_saves_collection()
+        previous = saves.find_one({"playerName": data["playerName"]})
+        fallback = previous["updated_at"].isoformat() if previous and previous.get("updated_at") else None
+        stamp_attempts(data["caseHistory"], normalize_doc(previous) if previous else [], now, fallback)
+        saves.update_one(
             {"playerName": data["playerName"]},
             {"$set": {**data, "updated_at": now},
-             "$setOnInsert": {"created_at": now}},
+             "$setOnInsert": {"created_at": now},
+             "$unset": {"decisionsMade": "", "relevantDecisionsMade": "", "relevantDecisionMade": ""}},
             upsert=True,
         )
     except PyMongoError:
@@ -128,8 +144,21 @@ def dashboard(request):
                         status=status.HTTP_503_SERVICE_UNAVAILABLE)
     return Response(build_dashboard(saves))
 
-@api_view(["GET"])
+@api_view(["GET", "DELETE"])
 def player_detail(request, player_name):
+    if request.method == "DELETE":
+        if request.user.role != "admin":
+            return Response({"error": "Solo el administrador puede eliminar jugadores"},
+                            status=status.HTTP_403_FORBIDDEN)
+        try:
+            result = get_saves_collection().delete_one({"playerName": player_name})
+        except PyMongoError:
+            return Response({"error": "No se pudo eliminar al jugador"},
+                            status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        if result.deleted_count == 0:
+            return Response({"error": "Jugador no encontrado"}, status=status.HTTP_404_NOT_FOUND)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
     try:
         doc = get_saves_collection().find_one({"playerName": player_name})
     except PyMongoError:
@@ -143,3 +172,22 @@ def player_detail(request, player_name):
         "caseHistory": normalize_doc(doc),
         "updated_at": doc["updated_at"].isoformat() if doc.get("updated_at") else None,
     })
+
+
+@api_view(["GET"])
+@permission_classes([IsAdmin])
+def admin_export(request):
+    """Copia completa de los datos (partidas y usuarios, sin contraseñas)."""
+    try:
+        saves = []
+        for doc in get_saves_collection().find():
+            doc.pop("_id", None)
+            saves.append(doc)
+        users = [public_user(d) for d in get_users_collection().find()]
+    except PyMongoError:
+        return Response({"error": "No se pudo consultar la base de datos"},
+                        status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    now = datetime.now(timezone.utc)
+    response = Response({"exported_at": now.isoformat(), "saves": saves, "users": users})
+    response["Content-Disposition"] = f'attachment; filename="plataforma-{now:%Y%m%d-%H%M}.json"'
+    return response
