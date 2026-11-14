@@ -68,13 +68,37 @@ services:
     depends_on:
       - backend
     ports:
-      - "80:80"
+      - "${HTTP_PORT:-80}:80"
+    networks:
+      - frontend_net
+
+  # Dirección pública con HTTPS mediante Tailscale Funnel (sin abrir puertos del router).
+  # Es opcional: se activa con COMPOSE_PROFILES=funnel en el .env (ver README).
+  tailscale:
+    image: tailscale/tailscale:stable
+    container_name: plataforma_tailscale
+    profiles: ["funnel"]
+    restart: unless-stopped
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_AUTH_ONCE: "true"
+      TS_HOSTNAME: ${TS_HOSTNAME:-plataforma}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SERVE_CONFIG: /config/serve.json
+      TS_USERSPACE: "true"
+    volumes:
+      - tailscale_state:/var/lib/tailscale
+      - ./tailscale:/config:ro
+    depends_on:
+      - frontend
     networks:
       - frontend_net
 
 volumes:
   mongo_data:
     name: plataforma_mongo_data
+  tailscale_state:
+    name: plataforma_tailscale_state
 
 networks:
   backend_net:

@@ -23,6 +23,46 @@
   `{"name":"Mi primer registro","description":"Prueba"}`
 - `DELETE /api/items/<id>/`: elimina un elemento.
 
+## Usar la plataforma desde otros equipos (red local)
+1. En el equipo servidor: `docker compose up -d --build`.
+2. Averigua su IP: en Windows `ipconfig` (IPv4 del Wi‑Fi o Ethernet), en Linux/macOS `ip a` / `ifconfig`.
+3. Abre el puerto en el firewall del servidor (Windows, PowerShell como administrador):
+   ```powershell
+   New-NetFirewallRule -DisplayName "Plataforma web" -Direction Inbound -Protocol TCP -LocalPort 80 -Action Allow -Profile Private,Domain
+   ```
+   La red Wi‑Fi debe estar marcada como **Privada** (Configuración → Red e Internet).
+4. Desde otro equipo de la misma red abre `http://IP-DEL-SERVIDOR/api/health/`;
+   debe mostrar `{"status":"ok","database":"connected"}`. Luego entra a `http://IP-DEL-SERVIDOR/`.
+5. En Unity usa como servidor `http://IP-DEL-SERVIDOR` y la `GAME_API_KEY` del `.env`.
+   En Player Settings → Other Settings → *Allow downloads over HTTP* elige *Always allowed*.
+
+Si cambias `HTTP_PORT`, añade `:PUERTO` a las URL y abre ese puerto en el firewall.
+Mantén `AUTH_COOKIE_SECURE=0` mientras uses HTTP (con 1 el login no funciona sin HTTPS).
+
+## Dirección pública con Tailscale Funnel (sin abrir puertos)
+Publica la plataforma en `https://plataforma.<tu-tailnet>.ts.net` mediante una conexión
+saliente de este equipo; no hay que tocar el router.
+
+1. Crea una cuenta en Tailscale. En su consola de administración (DNS) activa
+   **MagicDNS** y los **certificados HTTPS**, y permite **Funnel** para este equipo
+   (Access controls; si falta, el contenedor lo indicará en sus registros).
+2. En Settings → Keys genera una *auth key* (sin etiquetas).
+3. En el `.env` agrega:
+   ```
+   COMPOSE_PROFILES=funnel
+   TS_AUTHKEY=tskey-auth-...
+   TS_HOSTNAME=plataforma
+   ```
+4. `docker compose up -d --build`
+5. Comprueba la dirección: `docker compose exec tailscale tailscale funnel status`
+   (o `docker compose logs tailscale`). La primera vez puede tardar unos minutos
+   (certificado y DNS público).
+6. En Unity usa esa dirección `https://...ts.net` como servidor.
+
+Notas: no ejecutes `docker compose down -v` (borra la identidad del túnel y la dirección
+cambiaría). En la consola de Tailscale desactiva la caducidad de clave de este equipo para
+que no pida volver a iniciar sesión. La web sigue disponible también por la IP local.
+
 ## Usuarios y roles
 Hay dos roles. Todo exige sesión salvo `/api/health/`, `/api/auth/login/` y la subida de Unity.
 

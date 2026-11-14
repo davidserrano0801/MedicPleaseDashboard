@@ -10,6 +10,10 @@ ALLOWED_HOSTS = [
     for host in os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
     if host.strip()
 ]
+# Nginx habla con Django usando Host "localhost" (ver frontend/nginx.conf).
+for _host in ("localhost", "127.0.0.1"):
+    if _host not in ALLOWED_HOSTS and "*" not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append(_host)
 
 INSTALLED_APPS = [
     "django.contrib.contenttypes",
