@@ -54,9 +54,12 @@ saliente de este equipo; no hay que tocar el router.
    TS_HOSTNAME=plataforma
    ```
 4. `docker compose up -d --build`
-5. Comprueba la dirección: `docker compose exec tailscale tailscale funnel status`
-   (o `docker compose logs tailscale`). La primera vez puede tardar unos minutos
-   (certificado y DNS público).
+5. Comprueba que el contenedor está en marcha (`docker compose ps -a`) y revisa sus
+   registros (`docker compose logs --tail 50 tailscale`). La dirección es
+   `https://TS_HOSTNAME.<tu-tailnet>.ts.net`; el nombre exacto de la máquina aparece en
+   la consola de Tailscale (Machines). También puedes usar
+   `docker compose exec tailscale tailscale funnel status`. La primera vez puede tardar
+   unos minutos (certificado y DNS público).
 6. En Unity usa esa dirección `https://...ts.net` como servidor.
 
 Notas: no ejecutes `docker compose down -v` (borra la identidad del túnel y la dirección

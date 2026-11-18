@@ -84,6 +84,8 @@ services:
       TS_AUTH_ONCE: "true"
       TS_HOSTNAME: ${TS_HOSTNAME:-plataforma}
       TS_STATE_DIR: /var/lib/tailscale
+      # Ubicación estándar del socket: así "docker compose exec tailscale tailscale ..." funciona.
+      TS_SOCKET: /var/run/tailscale/tailscaled.sock
       TS_SERVE_CONFIG: /config/serve.json
       TS_USERSPACE: "true"
     volumes:
