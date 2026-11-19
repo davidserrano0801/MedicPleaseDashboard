@@ -25,8 +25,12 @@ def _db_error():
 
 
 def _client_ip(request):
-    # Nginx fija X-Real-IP con la IP real del cliente.
-    return request.META.get("HTTP_X_REAL_IP") or request.META.get("REMOTE_ADDR", "")
+    meta = request.META
+    # En Render la IP real llega en CF-Connecting-IP (la fija el proxy, no el cliente).
+    if settings.TRUST_CF_CONNECTING_IP and meta.get("HTTP_CF_CONNECTING_IP"):
+        return meta["HTTP_CF_CONNECTING_IP"]
+    # En Docker Compose, Nginx fija X-Real-IP con la IP real del cliente.
+    return meta.get("HTTP_X_REAL_IP") or meta.get("REMOTE_ADDR", "")
 
 
 def public_user(doc):

@@ -5,6 +5,15 @@ from django.conf import settings
 @lru_cache(maxsize=1)
 def get_client():
     cfg = settings.MONGO_CONFIG
+    if settings.MONGO_URI:
+        # MongoDB Atlas: cadena mongodb+srv://... (usa TLS y descubre los nodos por DNS).
+        import certifi
+        return MongoClient(
+            settings.MONGO_URI,
+            tlsCAFile=certifi.where(),
+            serverSelectionTimeoutMS=8000,
+            tz_aware=True,
+        )
     return MongoClient(
         host=cfg["host"],
         port=cfg["port"],

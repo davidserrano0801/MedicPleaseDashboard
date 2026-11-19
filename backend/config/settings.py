@@ -14,6 +14,10 @@ ALLOWED_HOSTS = [
 for _host in ("localhost", "127.0.0.1"):
     if _host not in ALLOWED_HOSTS and "*" not in ALLOWED_HOSTS:
         ALLOWED_HOSTS.append(_host)
+# En Render, el nombre público del servicio llega solo en esta variable.
+_render_host = os.environ.get("RENDER_EXTERNAL_HOSTNAME", "")
+if _render_host and _render_host not in ALLOWED_HOSTS and "*" not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append(_render_host)
 
 INSTALLED_APPS = [
     "django.contrib.contenttypes",
@@ -23,8 +27,17 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",  # sirve el frontend compilado (si existe)
     "django.middleware.common.CommonMiddleware",
 ]
+
+# Frontend (Vite) compilado: en la imagen de la nube se copia a /app/frontend_dist y Django
+# lo sirve en la raíz, así web y API comparten origen (sin CORS y con cookies normales).
+STATIC_URL = "/static/"
+_frontend_dist = Path(os.environ.get("FRONTEND_DIST", BASE_DIR / "frontend_dist"))
+if _frontend_dist.is_dir():
+    WHITENOISE_ROOT = _frontend_dist
+    WHITENOISE_INDEX_FILE = True
 
 ROOT_URLCONF = "config.urls"
 TEMPLATES = []
@@ -63,6 +76,9 @@ REST_FRAMEWORK = {
     ],
 }
 
+# Si MONGO_URI está definida (MongoDB Atlas) se usa en lugar de MONGO_HOST/PORT/usuario.
+MONGO_URI = os.environ.get("MONGO_URI", "")
+
 MONGO_CONFIG = {
     "host": os.environ.get("MONGO_HOST", "mongodb"),
     "port": int(os.environ.get("MONGO_PORT", "27017")),
@@ -81,3 +97,5 @@ AUTH_COOKIE_NAME = "session"
 AUTH_SESSION_HOURS = int(os.environ.get("AUTH_SESSION_HOURS", "12"))
 # Pon AUTH_COOKIE_SECURE=1 cuando el sitio se sirva por HTTPS.
 AUTH_COOKIE_SECURE = os.environ.get("AUTH_COOKIE_SECURE", "0").lower() in ("1", "true", "yes")
+# Render (servicios públicos) reenvía la IP real del visitante en CF-Connecting-IP.
+TRUST_CF_CONNECTING_IP = os.environ.get("RENDER", "") == "true"

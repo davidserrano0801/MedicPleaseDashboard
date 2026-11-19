@@ -23,6 +23,26 @@
   `{"name":"Mi primer registro","description":"Prueba"}`
 - `DELETE /api/items/<id>/`: elimina un elemento.
 
+## Despliegue en la nube (Render + MongoDB Atlas)
+Un solo servicio de Render construye el `Dockerfile` de la raíz: compila el frontend y Django lo sirve
+junto con la API (mismo origen: sin CORS y con cookies normales). La base de datos es MongoDB Atlas.
+
+Variables de entorno del servicio en Render:
+
+| Variable | Valor |
+|---|---|
+| `MONGO_URI` | cadena `mongodb+srv://...` de Atlas (con la contraseña real) |
+| `MONGO_DATABASE` | `plataforma` |
+| `DJANGO_SECRET_KEY` | cadena larga y aleatoria (`openssl rand -hex 32`) |
+| `DJANGO_DEBUG` | `0` |
+| `GAME_API_KEY` | la clave que usa Unity |
+| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | primer administrador (contraseña de 8+ caracteres) |
+| `AUTH_COOKIE_SECURE` | `1` |
+
+Health check path: `/api/health/`. El dominio `*.onrender.com` se permite solo
+(`RENDER_EXTERNAL_HOSTNAME`). En el juego, `endpointUrl` = `https://TU-SERVICIO.onrender.com/api/saves/`.
+Para desarrollo local se sigue usando `docker compose up` sin cambios.
+
 ## Usar la plataforma desde otros equipos (red local)
 1. En el equipo servidor: `docker compose up -d --build`.
 2. Averigua su IP: en Windows `ipconfig` (IPv4 del Wi‑Fi o Ethernet), en Linux/macOS `ip a` / `ifconfig`.
@@ -43,9 +63,12 @@ Mantén `AUTH_COOKIE_SECURE=0` mientras uses HTTP (con 1 el login no funciona si
 Publica la plataforma en `https://plataforma.<tu-tailnet>.ts.net` mediante una conexión
 saliente de este equipo; no hay que tocar el router.
 
-1. Crea una cuenta en Tailscale. En su consola de administración (DNS) activa
-   **MagicDNS** y los **certificados HTTPS**, y permite **Funnel** para este equipo
-   (Access controls; si falta, el contenedor lo indicará en sus registros).
+1. Crea una cuenta en Tailscale y prepara tu red en la consola de administración
+   (https://login.tailscale.com/admin). Como aquí Funnel se configura por archivo, Tailscale
+   no hace estos pasos solo; hay que hacerlos a mano:
+   - **DNS**: activa **MagicDNS** y **HTTPS Certificates**.
+   - **Access controls**: abre la sección **Funnel** y pulsa **Add Funnel to policy**
+     (agrega `"attr": ["funnel"]` en `nodeAttrs`).
 2. En Settings → Keys genera una *auth key* (sin etiquetas).
 3. En el `.env` agrega:
    ```
@@ -61,6 +84,10 @@ saliente de este equipo; no hay que tocar el router.
    `docker compose exec tailscale tailscale funnel status`. La primera vez puede tardar
    unos minutos (certificado y DNS público).
 6. En Unity usa esa dirección `https://...ts.net` como servidor.
+
+Si el enlace no abre: espera hasta 10 minutos (DNS público), pruébalo desde un celular con
+datos móviles y revisa `docker compose logs --tail 80 tailscale`. Tras cambiar algo en la
+consola, ejecuta `docker compose restart tailscale`.
 
 Notas: no ejecutes `docker compose down -v` (borra la identidad del túnel y la dirección
 cambiaría). En la consola de Tailscale desactiva la caducidad de clave de este equipo para
